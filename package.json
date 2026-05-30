@@ -1,0 +1,32 @@
+{
+  "name": "socialsox-tui",
+  "version": "0.1.0",
+  "description": "TUI crossposter for Mastodon X Bluesky",
+  "main": "src/cli.js",
+  "scripts": {
+    "start": "tsx src/cli.js",
+    "dev": "tsx watch src/cli.js",
+    "test": "echo \"No tests yet\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "execa": "^9.6.1",
+    "ink": "^7.0.5",
+    "keytar": "^7.9.0",
+    "meow": "^14.1.0",
+    "p-queue": "^9.3.0",
+    "react": "^19.2.6",
+    "sharp": "^0.34.5",
+    "twitter-api-v2": "^1.29.0",
+    "undici": "^8.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.3"
+  }
+}
