@@ -48,7 +48,6 @@ const SLASH_COMMANDS = [
 ];
 
 const SOCIALSOX_BANNER = buildBanner();
-const CARET_MARKER = '\u0000';
 const BRAILLE_SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const LOADING_MESSAGES = [
   'sacrificing a byte to the API gods …',
@@ -884,56 +883,41 @@ function isClearImagesShortcut(key, input) {
 }
 
 function renderMessageLines(message, caretIndex = -1, blinkOn = true) {
-  let text = String(message || '');
-  if (caretIndex >= 0) {
-    text = insertAt(text, caretIndex, CARET_MARKER);
-  }
-
-  if (text.length === 0) {
-    const lines = [
-      '',
-      '',
-      '',
-    ];
-    return lines;
-  }
-
+  const text = String(message || '');
   const max = 72;
-  const visibleReversed = [];
-  let end = text.length;
+  const maxVisibleLines = 4;
+  const layout = buildWrappedLayout(text, max);
 
-  // Walk backward across logical lines and stop once we have enough visual rows.
-  while (end >= 0 && visibleReversed.length < 4) {
-    let start = end - 1;
-    while (start >= 0 && text[start] !== '\n') {
-      start--;
-    }
+  const clampedCaret = caretIndex >= 0 ? clampIndex(caretIndex, text.length) : -1;
+  const caretPos = clampedCaret >= 0 ? layout.insertionPoints[clampedCaret] : null;
 
-    const raw = text.slice(start + 1, end);
-    if (raw.length === 0) {
-      visibleReversed.push('');
-    } else {
-      const remaining = 4 - visibleReversed.length;
-      const wrappedTail = wrapLineStableTailByWords(raw, max, remaining);
-      for (let j = wrappedTail.length - 1; j >= 0 && visibleReversed.length < 4; j--) {
-        visibleReversed.push(wrappedTail[j]);
-      }
-    }
+  const caretLine = caretPos ? caretPos.line : Math.max(0, layout.lines.length - 1);
+  const endLineExclusive = Math.max(maxVisibleLines, caretLine + 1);
+  const startLine = Math.max(0, endLineExclusive - maxVisibleLines);
 
-    end = start;
+  const visible = layout.lines.slice(startLine, startLine + maxVisibleLines);
+  while (visible.length < maxVisibleLines) {
+    visible.push('');
   }
 
-  const visible = visibleReversed.reverse();
-  while (visible.length < 4) {
-    visible.push('');
+  if (caretPos && caretPos.line >= startLine && caretPos.line < startLine + maxVisibleLines) {
+    const localLineIndex = caretPos.line - startLine;
+    const rawLine = visible[localLineIndex] || '';
+    const caretChar = blinkOn ? '█' : ' ';
+
+    if (caretPos.column < rawLine.length) {
+      visible[localLineIndex] =
+        rawLine.slice(0, caretPos.column) +
+        chalk.white(caretChar) +
+        rawLine.slice(caretPos.column + 1);
+    } else {
+      visible[localLineIndex] = rawLine + chalk.white(caretChar);
+    }
   }
 
   let imageCounter = 0;
   return visible.map((lineText) => {
-    let formatted = lineText;
-    if (formatted.includes(CARET_MARKER)) {
-      formatted = formatted.replaceAll(CARET_MARKER, chalk.white(blinkOn ? '█' : ' '));
-    }
+    const formatted = lineText;
     if (!formatted.includes('[image')) return formatted;
     return formatted.replace(/\[image[^\]]*\]/gi, () => {
       imageCounter++;
@@ -942,76 +926,87 @@ function renderMessageLines(message, caretIndex = -1, blinkOn = true) {
   });
 }
 
-function wrapLineStableTailByWords(line, max, limit) {
-  if (!line) return [''];
+function buildWrappedLayout(text, maxCols) {
+  const lines = [''];
+  const insertionPoints = [];
+  let line = 0;
+  let column = 0;
 
-  const tail = [];
-  let current = '';
-  let i = 0;
+  const newline = () => {
+    line++;
+    column = 0;
+    lines.push('');
+  };
 
-  const pushTail = (value) => {
-    if (!value) return;
-    tail.push(value);
-    if (tail.length > limit) {
-      tail.shift();
+  const writeChar = (absoluteIndex, ch) => {
+    insertionPoints[absoluteIndex] = { line, column };
+    lines[line] += ch;
+    column++;
+
+    // Soft-wrap only if more non-newline text remains.
+    if (column >= maxCols) {
+      const next = text[absoluteIndex + 1];
+      if (typeof next === 'string' && next !== '\n') {
+        newline();
+      }
     }
   };
 
-  while (i < line.length) {
-    if (isWhitespaceChar(line[i])) {
-      const spaceStart = i;
-      while (i < line.length && isWhitespaceChar(line[i])) {
-        i++;
-      }
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
 
-      // Preserve spaces exactly so typing space is reflected immediately.
-      let remaining = line.slice(spaceStart, i);
-      while (remaining.length > 0) {
-        const room = max - current.length;
-        if (room <= 0) {
-          pushTail(current);
-          current = '';
-          continue;
-        }
-
-        const piece = remaining.slice(0, room);
-        current += piece;
-        remaining = remaining.slice(piece.length);
-
-        if (current.length === max) {
-          pushTail(current);
-          current = '';
-        }
-      }
-      continue;
-    }
-
-    const wordStart = i;
-    while (i < line.length && !isWhitespaceChar(line[i])) {
+    if (ch === '\n') {
+      insertionPoints[i] = { line, column };
+      newline();
       i++;
-    }
-    const word = line.slice(wordStart, i);
-
-    if (!current) {
-      current = word;
       continue;
     }
 
-    if (current.length + word.length <= max) {
-      current += word;
+    const runIsWhitespace = isInlineWhitespace(ch);
+    let end = i + 1;
+    while (end < text.length) {
+      const next = text[end];
+      if (next === '\n') break;
+      if (isInlineWhitespace(next) !== runIsWhitespace) break;
+      end++;
+    }
+
+    const runLength = end - i;
+
+    if (runIsWhitespace) {
+      // Preserve spaces/tabs exactly as typed.
+      for (let p = i; p < end; p++) {
+        if (column >= maxCols) {
+          newline();
+        }
+        writeChar(p, text[p]);
+      }
+      i = end;
       continue;
     }
 
-    pushTail(current);
-    current = word;
+    // Word run: wrap at word boundary when possible; split only if word is longer than line width.
+    if (column > 0 && runLength <= maxCols && column + runLength > maxCols) {
+      newline();
+    }
+
+    for (let p = i; p < end; p++) {
+      if (column >= maxCols) {
+        newline();
+      }
+      writeChar(p, text[p]);
+    }
+
+    i = end;
   }
 
-  pushTail(current);
-  return tail.length > 0 ? tail : [''];
+  insertionPoints[text.length] = { line, column };
+  return { lines, insertionPoints };
 }
 
-function isWhitespaceChar(char) {
-  return char === ' ' || char === '\t' || char === '\n' || char === '\r';
+function isInlineWhitespace(ch) {
+  return ch === ' ' || ch === '\t' || ch === '\r';
 }
 
 function looksLikeImageToken(input) {
