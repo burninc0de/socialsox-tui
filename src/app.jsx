@@ -101,6 +101,8 @@ export function App({ resetConfig }) {
   const [slashIndex, setSlashIndex] = useState(0);
   const [messageCursor, setMessageCursor] = useState(0);
   const [spinnerFrameIndex, setSpinnerFrameIndex] = useState(0);
+  const [blinkOn, setBlinkOn] = useState(true);
+  const lastInputAt = useRef(Date.now());
   const [secretStorageMode, setSecretStorageMode] = useState('keychain');
 
   const [form, setForm] = useState({
@@ -136,6 +138,24 @@ export function App({ resetConfig }) {
 
     return () => clearInterval(timer);
   }, [busy]);
+
+  useEffect(() => {
+    if (!editing) {
+      setBlinkOn(true);
+      return;
+    }
+
+    const timer = setInterval(() => {
+      const idle = Date.now() - lastInputAt.current > 500;
+      if (idle) {
+        setBlinkOn((b) => !b);
+      } else {
+        setBlinkOn(true);
+      }
+    }, 800);
+
+    return () => clearInterval(timer);
+  }, [editing]);
 
   const slashQuery = form.message.startsWith('/') ? form.message.toLowerCase() : '';
   const filteredCommands = slashQuery
@@ -349,6 +369,8 @@ export function App({ resetConfig }) {
 
   useInput(async (input, key) => {
     if (busy) return;
+    lastInputAt.current = Date.now();
+    setBlinkOn(true);
 
     if (screen === 'post' && isSubmitPostShortcut(key, input)) {
       await submitPost();
@@ -723,7 +745,8 @@ export function App({ resetConfig }) {
             <Box flexDirection="column" minHeight={5}>
               {renderMessageLines(
                 form.message,
-                selection.key === 'message' && editing ? messageCursor : -1
+                selection.key === 'message' && editing ? messageCursor : -1,
+                blinkOn
               ).map((line, idx) => (
                 <Text key={`msg-line-${idx}`}>{line}</Text>
               ))}
@@ -860,7 +883,7 @@ function isClearImagesShortcut(key, input) {
   return false;
 }
 
-function renderMessageLines(message, caretIndex = -1) {
+function renderMessageLines(message, caretIndex = -1, blinkOn = true) {
   let text = String(message || '');
   if (caretIndex >= 0) {
     text = insertAt(text, caretIndex, CARET_MARKER);
@@ -909,7 +932,7 @@ function renderMessageLines(message, caretIndex = -1) {
   return visible.map((lineText) => {
     let formatted = lineText;
     if (formatted.includes(CARET_MARKER)) {
-      formatted = formatted.replaceAll(CARET_MARKER, chalk.white('█'));
+      formatted = formatted.replaceAll(CARET_MARKER, chalk.white(blinkOn ? '█' : ' '));
     }
     if (!formatted.includes('[image')) return formatted;
     return formatted.replace(/\[image[^\]]*\]/gi, () => {
