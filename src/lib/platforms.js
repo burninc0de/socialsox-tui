@@ -1,5 +1,18 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { TwitterApi } from 'twitter-api-v2';
 import { compressImageForX } from './media.js';
+
+function extensionForMime(mimeType, fallbackName = 'media.bin') {
+  if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') return '.jpg';
+  if (mimeType === 'image/png') return '.png';
+  if (mimeType === 'image/webp') return '.webp';
+  if (mimeType === 'image/gif') return '.gif';
+  if (mimeType === 'video/mp4') return '.mp4';
+  if (mimeType === 'video/webm') return '.webm';
+  return path.extname(fallbackName) || '.bin';
+}
 
 function normalizeMastodonInstance(instance) {
   let clean = (instance || '').trim();
@@ -9,17 +22,8 @@ function normalizeMastodonInstance(instance) {
   return `${url.protocol}//${url.host}`;
 }
 
-async function waitForMastodonMedia(instance, token, mediaId, timeoutMs = 120000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const res = await fetch(`${instance}/api/v1/media/${mediaId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) break;
-    const data = await res.json();
-    if (data.url || data.preview_url || data.meta?.original) return;
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
+async function waitForMastodonMedia() {
+  await new Promise((resolve) => setTimeout(resolve, 20000));
 }
 
 export async function postToMastodon(message, config, secrets, media) {
@@ -48,7 +52,7 @@ export async function postToMastodon(message, config, secrets, media) {
     mediaIds.push(uploadData.id);
 
     if (item.isVideo) {
-      await waitForMastodonMedia(instance, token, uploadData.id);
+      await waitForMastodonMedia();
     }
   }
 
@@ -91,10 +95,21 @@ export async function postToX(message, _config, secrets, media) {
   });
 
   const mediaIds = [];
-  for (const rawItem of media) {
-    const item = rawItem.isImage ? await compressImageForX(rawItem) : rawItem;
-    const mediaId = await client.v1.uploadMedia(item.buffer, { mimeType: item.mimeType });
-    mediaIds.push(mediaId);
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'socialsox-x-'));
+  try {
+    for (let i = 0; i < media.length; i += 1) {
+      const rawItem = media[i];
+      const item = rawItem.isImage ? await compressImageForX(rawItem) : rawItem;
+
+      const ext = extensionForMime(item.mimeType, item.name);
+      const tempPath = path.join(tempDir, `upload-${i + 1}${ext}`);
+      await fs.writeFile(tempPath, item.buffer);
+
+      const mediaId = await client.v1.uploadMedia(tempPath, { mimeType: item.mimeType });
+      mediaIds.push(mediaId);
+    }
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
   }
 
   const tweet = await client.v2.tweet({

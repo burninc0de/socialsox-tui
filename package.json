@@ -16,6 +16,7 @@
   "dependencies": {
     "chalk": "^5.6.2",
     "execa": "^9.6.1",
+    "figlet": "^1.11.0",
     "ink": "^7.0.5",
     "keytar": "^7.9.0",
     "meow": "^14.1.0",
