@@ -9,7 +9,7 @@ import {
   hasLegacyImportFile,
   importLegacySocialSoxCredentials,
   loadConfig,
-  loadSecrets,
+  loadSecretsWithMetadata,
   resetStoredData,
   saveConfig,
   saveSecrets,
@@ -101,6 +101,7 @@ export function App({ resetConfig }) {
   const [slashIndex, setSlashIndex] = useState(0);
   const [messageCursor, setMessageCursor] = useState(0);
   const [spinnerFrameIndex, setSpinnerFrameIndex] = useState(0);
+  const [secretStorageMode, setSecretStorageMode] = useState('keychain');
 
   const [form, setForm] = useState({
     message: '',
@@ -148,7 +149,9 @@ export function App({ resetConfig }) {
           await resetStoredData();
         }
 
-        let [config, secrets] = await Promise.all([loadConfig(), loadSecrets()]);
+        let [config, loadedSecrets] = await Promise.all([loadConfig(), loadSecretsWithMetadata()]);
+        let secrets = loadedSecrets.secrets;
+        setSecretStorageMode(loadedSecrets.storage);
 
         const hasSavedData =
           !!config.mastodon.instance ||
@@ -224,7 +227,8 @@ export function App({ resetConfig }) {
     }, 2000);
 
     try {
-      await persistForm(form);
+      const persistedStorage = await persistForm(form);
+      if (persistedStorage) setSecretStorageMode(persistedStorage);
       const media = await loadMedia(form.attachments, inlineMedia);
       const result = await runCrosspost({
         message: form.message,
@@ -460,7 +464,8 @@ export function App({ resetConfig }) {
       setBusy(true);
       setStatus('Saving config...');
       try {
-        await persistForm(form);
+        const persistedStorage = await persistForm(form);
+        if (persistedStorage) setSecretStorageMode(persistedStorage);
         setStatus('Saved config and credentials.');
       } catch (error) {
         setStatus(`Save failed: ${error.message}`);
@@ -489,6 +494,8 @@ export function App({ resetConfig }) {
           blueskyHandle: imported.config.bluesky.handle || '',
           blueskyPassword: imported.secrets.blueskyPassword || '',
         }));
+        const loaded = await loadSecretsWithMetadata();
+        setSecretStorageMode(loaded.storage);
         setStatus(`Imported desktop credentials from ${imported.importedFrom}`);
         switchScreen('config');
       } catch (error) {
@@ -800,6 +807,12 @@ export function App({ resetConfig }) {
           ))}
         </Box>
       )}
+
+      {renderSecretStorageFooter(secretStorageMode) && (
+        <Box marginTop={1}>
+          <Text dimColor>{renderSecretStorageFooter(secretStorageMode)}</Text>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -1067,7 +1080,7 @@ function mask(value) {
 }
 
 async function persistForm(form) {
-  await Promise.all([
+  const [, secretStorage] = await Promise.all([
     saveConfig({
       mastodon: { enabled: form.mastodonEnabled, instance: form.mastodonInstance },
       x: { enabled: form.xEnabled },
@@ -1083,4 +1096,10 @@ async function persistForm(form) {
       blueskyPassword: form.blueskyPassword,
     }),
   ]);
+  return secretStorage;
+}
+
+function renderSecretStorageFooter(mode) {
+  if (mode === 'fallback') return 'secrets storage: encrypted fallback file (~/.config/socialsox-tui/secrets.json)';
+  return '';
 }

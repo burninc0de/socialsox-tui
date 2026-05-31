@@ -9,6 +9,14 @@ const CONFIG_DIR = path.join(os.homedir(), '.config', APP_NAME);
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 const FALLBACK_SECRET_PATH = path.join(CONFIG_DIR, 'secrets.json');
 const LEGACY_IMPORT_PATH = path.join(CONFIG_DIR, 'socialsox-credentials.json');
+const SECRET_KEYS = [
+  'mastodonToken',
+  'xApiKey',
+  'xApiSecret',
+  'xAccessToken',
+  'xAccessTokenSecret',
+  'blueskyPassword',
+];
 
 const DEFAULT_CONFIG = {
   mastodon: { enabled: true, instance: '' },
@@ -93,8 +101,8 @@ async function writeFallbackSecrets(secrets) {
   await fs.writeFile(FALLBACK_SECRET_PATH, JSON.stringify(encrypted, null, 2), { mode: 0o600 });
 }
 
-export async function loadSecrets() {
-  const out = {
+function emptySecrets() {
+  return {
     mastodonToken: '',
     xApiKey: '',
     xApiSecret: '',
@@ -102,6 +110,15 @@ export async function loadSecrets() {
     xAccessTokenSecret: '',
     blueskyPassword: '',
   };
+}
+
+function hasAnySecrets(secrets) {
+  return SECRET_KEYS.some((k) => Boolean(secrets[k]));
+}
+
+export async function loadSecretsWithMetadata() {
+  const out = emptySecrets();
+  let keychainFailed = false;
 
   try {
     const entries = await Promise.all([
@@ -121,14 +138,25 @@ export async function loadSecrets() {
       out.blueskyPassword,
     ] = entries.map((v) => v || '');
 
-    const hasAny = Object.values(out).some(Boolean);
-    if (hasAny) return out;
+    if (hasAnySecrets(out)) {
+      return { secrets: out, storage: 'keychain' };
+    }
   } catch {
-    // Fall through to file fallback.
+    keychainFailed = true;
   }
 
   const fallback = await readFallbackSecrets();
-  return { ...out, ...fallback };
+  const merged = { ...out, ...fallback };
+  if (hasAnySecrets(merged)) {
+    return { secrets: merged, storage: 'fallback' };
+  }
+
+  return { secrets: merged, storage: keychainFailed ? 'fallback' : 'keychain' };
+}
+
+export async function loadSecrets() {
+  const loaded = await loadSecretsWithMetadata();
+  return loaded.secrets;
 }
 
 export async function saveSecrets(secrets) {
@@ -141,8 +169,10 @@ export async function saveSecrets(secrets) {
       keytar.setPassword(APP_NAME, 'xAccessTokenSecret', secrets.xAccessTokenSecret || ''),
       keytar.setPassword(APP_NAME, 'blueskyPassword', secrets.blueskyPassword || ''),
     ]);
+    return 'keychain';
   } catch {
     await writeFallbackSecrets(secrets);
+    return 'fallback';
   }
 }
 
