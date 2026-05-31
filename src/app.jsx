@@ -734,6 +734,7 @@ export function App({ resetConfig }) {
       <Box justifyContent="center">
         <Text color={THEME.banner}>{SOCIALSOX_BANNER}</Text>
       </Box>
+      <Box><Text> </Text></Box>
       {screen === 'post' && (
         <Box marginTop={1} flexDirection="column">
           <Box
