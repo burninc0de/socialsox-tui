@@ -17,6 +17,7 @@ import {
 import { readClipboardImageMedia } from './lib/clipboard.js';
 import { extractInlineImagesFromMessage, loadMedia } from './lib/media.js';
 import { runCrosspost } from './lib/crosspost.js';
+import { loadBuiltInThemes } from './lib/themes.js';
 
 const POST_FIELDS = [
   { key: 'message', label: 'Message' },
@@ -43,12 +44,17 @@ const SLASH_COMMANDS = [
   { name: '/bluesky', desc: 'Toggle Bluesky' },
   { name: '/all', desc: 'Enable all platforms' },
   { name: '/none', desc: 'Disable all platforms' },
+  { name: '/themes', desc: 'Open theme picker' },
+  { name: '/system', desc: 'Use terminal-derived system theme' },
+  { name: '/clear', desc: 'Clear message and inline media' },
+  { name: '/post', desc: 'Submit post now' },
 
   { name: '/config', desc: 'Switch to config screen' },
 ];
 
 const SOCIALSOX_BANNER = buildBanner();
 const BRAILLE_SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const MESSAGE_PANEL_WIDTH = 72;
 const LOADING_MESSAGES = [
   'sacrificing a byte to the API gods …',
   'negotiating with rate limits …',
@@ -76,18 +82,11 @@ const LOADING_MESSAGES = [
   'packing your post parachute …',
   'convincing the server this isn’t spam …',
 ];
-const THEME = {
-  banner: 'cyanBright',
-  panelBg: pickPanelBackgroundColor(),
-  slashSelectionBg: 'black',
-  configActive: 'green',
-  resultsHeading: 'yellow',
-  success: 'green',
-  error: 'red',
-};
+const DEFAULT_UI_THEME = buildSystemTheme();
 
 export function App({ resetConfig }) {
   const { exit } = useApp();
+  const [bootstrapped, setBootstrapped] = useState(false);
   const [screen, setScreen] = useState('post');
   const [cursor, setCursor] = useState(0);
   const [editing, setEditing] = useState(true);
@@ -102,6 +101,9 @@ export function App({ resetConfig }) {
   const [blinkOn, setBlinkOn] = useState(true);
   const lastInputAt = useRef(Date.now());
   const [secretStorageMode, setSecretStorageMode] = useState('keychain');
+  const [themeCatalog, setThemeCatalog] = useState([]);
+  const [themePreference, setThemePreference] = useState({ mode: 'system', name: '' });
+  const [uiTheme, setUiTheme] = useState(DEFAULT_UI_THEME);
 
   const [form, setForm] = useState({
     message: '',
@@ -156,9 +158,10 @@ export function App({ resetConfig }) {
   }, [editing]);
 
   const slashQuery = form.message.startsWith('/') ? form.message.toLowerCase() : '';
-  const filteredCommands = slashQuery
-    ? SLASH_COMMANDS.filter((c) => c.name.startsWith(slashQuery))
-    : [];
+  const filteredCommands = useMemo(
+    () => getFilteredSlashCommands(slashQuery, themeCatalog),
+    [slashQuery, themeCatalog]
+  );
 
   useEffect(() => {
     (async () => {
@@ -167,9 +170,14 @@ export function App({ resetConfig }) {
           await resetStoredData();
         }
 
-        let [config, loadedSecrets] = await Promise.all([loadConfig(), loadSecretsWithMetadata()]);
+        let [config, loadedSecrets] = await Promise.all([
+          loadConfig(),
+          loadSecretsWithMetadata(),
+        ]);
+        const availableThemes = loadBuiltInThemes();
         let secrets = loadedSecrets.secrets;
         setSecretStorageMode(loadedSecrets.storage);
+        setThemeCatalog(availableThemes);
 
         const hasSavedData =
           !!config.mastodon.instance ||
@@ -183,6 +191,10 @@ export function App({ resetConfig }) {
           secrets = imported.secrets;
           autoImported = true;
         }
+
+        const normalizedTheme = normalizeThemePreference(config.theme, availableThemes);
+        setThemePreference(normalizedTheme);
+        setUiTheme(resolveUiTheme(normalizedTheme, availableThemes));
 
         setForm((prev) => ({
           ...prev,
@@ -211,6 +223,7 @@ export function App({ resetConfig }) {
         setStatus(`Failed to load config: ${error.message}`);
       } finally {
         setBusy(false);
+        setBootstrapped(true);
       }
     })();
   }, [resetConfig]);
@@ -219,7 +232,7 @@ export function App({ resetConfig }) {
   const selection = useMemo(() => activeFields[cursor], [activeFields, cursor]);
   const busySpinner = BRAILLE_SPINNER_FRAMES[spinnerFrameIndex];
   const messageLayout = useMemo(
-    () => buildWrappedLayout(String(form.message || ''), 72),
+    () => buildWrappedLayout(String(form.message || ''), MESSAGE_PANEL_WIDTH),
     [form.message]
   );
   const mediaSummary = useMemo(
@@ -227,13 +240,13 @@ export function App({ resetConfig }) {
     [form.attachments, inlineMedia]
   );
   const imageTagLine = useMemo(
-    () => renderImageTagLine(form.attachments, inlineMedia),
-    [form.attachments, inlineMedia]
+    () => renderImageTagLine(form.attachments, inlineMedia, uiTheme),
+    [form.attachments, inlineMedia, uiTheme]
   );
   const isMessageEditing = selection.key === 'message' && editing;
   const renderedMessageLines = useMemo(
-    () => renderMessageLines(form.message, isMessageEditing ? messageCursor : -1, blinkOn, messageLayout),
-    [form.message, isMessageEditing, messageCursor, blinkOn, messageLayout]
+    () => renderMessageLines(form.message, isMessageEditing ? messageCursor : -1, blinkOn, messageLayout, uiTheme),
+    [form.message, isMessageEditing, messageCursor, blinkOn, messageLayout, uiTheme]
   );
 
   function switchScreen(nextScreen) {
@@ -262,7 +275,7 @@ export function App({ resetConfig }) {
     }, 2000);
 
     try {
-      const persistedStorage = await persistForm(form);
+      const persistedStorage = await persistForm(form, themePreference);
       if (persistedStorage) setSecretStorageMode(persistedStorage);
       const media = await loadMedia(form.attachments, inlineMedia);
       const result = await runCrosspost({
@@ -333,24 +346,96 @@ export function App({ resetConfig }) {
     }
   }
 
-  function executeSlashCommand(msg) {
+  async function executeSlashCommand(msg, selectedCommand = null) {
     const cmd = msg.split(/\s+/)[0].toLowerCase();
-    setSlashActive(false);
-    setForm((prev) => ({ ...prev, message: '' }));
-    setMessageCursor(0);
+
+    const clearSlashComposer = () => {
+      setSlashActive(false);
+      setForm((prev) => ({ ...prev, message: '' }));
+      setMessageCursor(0);
+    };
+
+    const openThemesSubmenu = () => {
+      const opener = '/themes ';
+      setForm((prev) => ({ ...prev, message: opener }));
+      setMessageCursor(opener.length);
+      setSlashActive(true);
+      setSlashIndex(0);
+      setStatus('Theme submenu: use arrows and Enter to select.');
+    };
+
+    const applyThemeSelection = async (nextPreference, label) => {
+      clearSlashComposer();
+      setThemePreference(nextPreference);
+      setUiTheme(resolveUiTheme(nextPreference, themeCatalog));
+      try {
+        const existing = await loadConfig();
+        await saveConfig({ ...existing, theme: nextPreference });
+        setStatus(`${label} theme applied.`);
+      } catch (error) {
+        setStatus(`${label} theme applied for this session only (${error.message}).`);
+      }
+    };
+
+    if (selectedCommand?.kind === 'theme-menu') {
+      openThemesSubmenu();
+      return;
+    }
+
+    if (selectedCommand?.kind === 'system') {
+      await applyThemeSelection({ mode: 'system', name: '' }, 'System');
+      return;
+    }
+
+    if (selectedCommand?.kind === 'manual') {
+      await applyThemeSelection({ mode: 'manual', name: selectedCommand.themeName }, selectedCommand.themeName);
+      return;
+    }
+
+    if (cmd === '/system') {
+      await applyThemeSelection({ mode: 'system', name: '' }, 'System');
+      return;
+    }
+
+    if (cmd === '/themes') {
+      const requestedTheme = msg.replace(/^\/themes\s*/i, '').trim();
+      if (!requestedTheme) {
+        openThemesSubmenu();
+        return;
+      }
+
+      if (requestedTheme.toLowerCase() === 'system' || requestedTheme.toLowerCase() === 'default') {
+        await applyThemeSelection({ mode: 'system', name: '' }, 'System');
+        return;
+      }
+
+      const match = themeCatalog.find((theme) => theme.name.toLowerCase() === requestedTheme.toLowerCase());
+      if (!match) {
+        setStatus(`Unknown theme: ${requestedTheme}.`);
+        return;
+      }
+
+      await applyThemeSelection({ mode: 'manual', name: match.name }, match.name);
+      return;
+    }
+
+    clearSlashComposer();
 
     const commands = {
       '/mastodon': () => {
-        setForm((prev) => ({ ...prev, mastodonEnabled: !prev.mastodonEnabled }));
-        setStatus(`Mastodon ${form.mastodonEnabled ? 'disabled' : 'enabled'}.`);
+        const next = !formRef.current.mastodonEnabled;
+        setForm((prev) => ({ ...prev, mastodonEnabled: next }));
+        setStatus(`Mastodon ${next ? 'enabled' : 'disabled'}.`);
       },
       '/x': () => {
-        setForm((prev) => ({ ...prev, xEnabled: !prev.xEnabled }));
-        setStatus(`X ${form.xEnabled ? 'disabled' : 'enabled'}.`);
+        const next = !formRef.current.xEnabled;
+        setForm((prev) => ({ ...prev, xEnabled: next }));
+        setStatus(`X ${next ? 'enabled' : 'disabled'}.`);
       },
       '/bluesky': () => {
-        setForm((prev) => ({ ...prev, blueskyEnabled: !prev.blueskyEnabled }));
-        setStatus(`Bluesky ${form.blueskyEnabled ? 'disabled' : 'enabled'}.`);
+        const next = !formRef.current.blueskyEnabled;
+        setForm((prev) => ({ ...prev, blueskyEnabled: next }));
+        setStatus(`Bluesky ${next ? 'enabled' : 'disabled'}.`);
       },
       '/all': () => {
         setForm((prev) => ({ ...prev, mastodonEnabled: true, xEnabled: true, blueskyEnabled: true }));
@@ -377,7 +462,7 @@ export function App({ resetConfig }) {
 
   async function saveAndExit() {
     try {
-      await persistForm(formRef.current);
+      await persistForm(formRef.current, themePreference);
     } catch {}
     exit();
   }
@@ -396,6 +481,15 @@ export function App({ resetConfig }) {
       setInlineMedia([]);
       setForm((prev) => ({ ...prev, attachments: '' }));
       setStatus('Cleared all image attachments.');
+      return;
+    }
+
+    if (screen === 'post' && isNewPostShortcut(key, input)) {
+      setForm((prev) => ({ ...prev, message: '', attachments: '' }));
+      setInlineMedia([]);
+      setResults([]);
+      setMessageCursor(0);
+      setStatus('');
       return;
     }
 
@@ -501,7 +595,7 @@ export function App({ resetConfig }) {
       setBusy(true);
       setStatus('Saving config...');
       try {
-        const persistedStorage = await persistForm(form);
+        const persistedStorage = await persistForm(form, themePreference);
         if (persistedStorage) setSecretStorageMode(persistedStorage);
         setStatus('Saved config and credentials.');
       } catch (error) {
@@ -559,6 +653,27 @@ export function App({ resetConfig }) {
       return;
     }
 
+    if (editing && screen === 'post' && slashActive && filteredCommands.length > 0 && key.upArrow) {
+      setSlashIndex((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
+      return;
+    }
+
+    if (editing && screen === 'post' && slashActive && filteredCommands.length > 0 && key.downArrow) {
+      setSlashIndex((i) => (i + 1) % filteredCommands.length);
+      return;
+    }
+
+    if (editing && screen === 'post' && slashActive && filteredCommands.length > 0 && key.return) {
+      const selected = filteredCommands[slashIndex];
+      if (selected) {
+        setForm((prev) => ({ ...prev, message: selected.name }));
+        setMessageCursor(selected.name.length);
+        setSlashActive(false);
+        await executeSlashCommand(selected.name, selected);
+      }
+      return;
+    }
+
     if (key.return && !editing && screen === 'config') {
       if (selection.key.endsWith('Enabled')) {
         setForm((prev) => ({ ...prev, [selection.key]: !prev[selection.key] }));
@@ -575,16 +690,6 @@ export function App({ resetConfig }) {
       }
 
       if (key.return && screen === 'post' && selection.key === 'message') {
-        if (slashActive && filteredCommands.length > 0) {
-          const selected = filteredCommands[slashIndex];
-          if (selected) {
-            setForm((prev) => ({ ...prev, message: selected.name }));
-            setMessageCursor(selected.name.length);
-            setSlashActive(false);
-            executeSlashCommand(selected.name);
-          }
-          return;
-        }
         const currentMessage = String(formRef.current.message || '');
         const cursorIndex = clampIndex(messageCursor, currentMessage.length);
         const nextMessage = insertAt(currentMessage, cursorIndex, '\n');
@@ -595,16 +700,6 @@ export function App({ resetConfig }) {
 
       if (key.return) {
         setEditing(false);
-        return;
-      }
-
-      if (key.upArrow && slashActive && screen === 'post' && selection.key === 'message') {
-        setSlashIndex((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
-        return;
-      }
-
-      if (key.downArrow && slashActive && screen === 'post' && selection.key === 'message') {
-        setSlashIndex((i) => (i + 1) % filteredCommands.length);
         return;
       }
 
@@ -744,16 +839,27 @@ export function App({ resetConfig }) {
     }
   });
 
+  if (!bootstrapped) {
+    return (
+      <Box flexDirection="column" padding={1} paddingLeft={2}>
+        <Banner color="white" />
+        <Box marginTop={1}>
+          <Text dimColor>{status}</Text>
+        </Box>
+      </Box>
+    );
+  }
+
   return (
     <Box flexDirection="column" padding={1} paddingLeft={2}>
-      <Banner />
+      <Banner color={uiTheme.banner} />
       <Box><Text> </Text></Box>
       {screen === 'post' && (
         <Box marginTop={1} flexDirection="column">
           <Box
             paddingX={2}
             paddingY={1}
-            backgroundColor={THEME.panelBg}
+            backgroundColor={uiTheme.panelBg}
             flexDirection="column"
           >
             <Box flexDirection="column" minHeight={5}>
@@ -761,8 +867,15 @@ export function App({ resetConfig }) {
                 <Text key={`msg-line-${idx}`}>{line}</Text>
               ))}
               {slashActive && filteredCommands.length > 0 && filteredCommands.map((cmd, idx) => (
-                <Text key={cmd.name} backgroundColor={idx === slashIndex ? THEME.slashSelectionBg : undefined}>
-                  {' '}{chalk.cyan(cmd.name)}{'  '}{chalk.dim(cmd.desc)}{' '}
+                <Text
+                  key={cmd.name}
+                  backgroundColor={idx === slashIndex ? uiTheme.slashSelectionBg : undefined}
+                  color={idx === slashIndex ? uiTheme.slashSelectionFg : undefined}
+                >
+                  {idx === slashIndex ? chalk.bold(' › ') : '   '}
+                  {idx === slashIndex ? chalk.bold(cmd.name) : colorize(cmd.name, uiTheme.commandName)}
+                  {'  '}
+                  {idx === slashIndex ? cmd.desc : chalk.dim(cmd.desc)}
                 </Text>
               ))}
               {imageTagLine ? (
@@ -774,7 +887,7 @@ export function App({ resetConfig }) {
           </Box>
           <Box marginTop={1}>
             <Text dimColor>{form.message.length} chars{mediaSummary && ` · ${mediaSummary}`} · </Text>
-            {busy && <Text color="cyan">{busySpinner} </Text>}
+            {busy && <Text color={uiTheme.spinner}>{busySpinner} </Text>}
             <Text dimColor>{status}</Text>
           </Box>
         </Box>
@@ -785,6 +898,7 @@ export function App({ resetConfig }) {
           mastodonEnabled={form.mastodonEnabled}
           xEnabled={form.xEnabled}
           blueskyEnabled={form.blueskyEnabled}
+          uiTheme={uiTheme}
         />
       )}
 
@@ -801,7 +915,7 @@ export function App({ resetConfig }) {
                 : formatValue(val);
 
             return (
-              <Text key={f.key} color={active ? THEME.configActive : undefined}>
+              <Text key={f.key} color={active ? uiTheme.configActive : undefined}>
                 {active ? chalk.bold('>') : ' '} {f.label}: {shown}
                 {active && editing ? chalk.dim('  [editing]') : ''}
               </Text>
@@ -815,9 +929,9 @@ export function App({ resetConfig }) {
 
       {results.length > 0 && (
         <Box marginTop={1} flexDirection="column">
-          <Text color={THEME.resultsHeading} bold>Results</Text>
+          <Text color={uiTheme.resultsHeading} bold>Results</Text>
           {results.map((r) => (
-            <Text key={r.platform} color={r.success ? THEME.success : THEME.error}>
+            <Text key={r.platform} color={r.success ? uiTheme.success : uiTheme.error}>
               {r.success ? '✓' : '✗'} {r.platform}: {r.success ? r.value.url : r.error}
             </Text>
           ))}
@@ -839,27 +953,27 @@ function formatValue(value) {
   return String(value);
 }
 
-const Banner = React.memo(function Banner() {
+const Banner = React.memo(function Banner({ color }) {
   return (
     <Box justifyContent="center">
-      <Text color={THEME.banner}>{SOCIALSOX_BANNER}</Text>
+      <Text color={color}>{SOCIALSOX_BANNER}</Text>
     </Box>
   );
 });
 
-const PostQuickHelp = React.memo(function PostQuickHelp({ mastodonEnabled, xEnabled, blueskyEnabled }) {
+const PostQuickHelp = React.memo(function PostQuickHelp({ mastodonEnabled, xEnabled, blueskyEnabled, uiTheme }) {
   return (
     <Box marginTop={1} flexDirection="column">
       <Box>
         <Text>
-          {pill('alt+1 mastodon', mastodonEnabled)}{' '}
-          {pill('alt+2 x', xEnabled)}{' '}
-          {pill('alt+3 bluesky', blueskyEnabled)}
+          {pill('alt+1 mastodon', mastodonEnabled, uiTheme)}{' '}
+          {pill('alt+2 x', xEnabled, uiTheme)}{' '}
+          {pill('alt+3 bluesky', blueskyEnabled, uiTheme)}
         </Text>
       </Box>
       <Box marginTop={1}>
         <Text dimColor>
-          ctrl+p post
+          ctrl+n new · ctrl+p post
         </Text>
       </Box>
       <Box justifyContent="flex-end">
@@ -871,8 +985,20 @@ const PostQuickHelp = React.memo(function PostQuickHelp({ mastodonEnabled, xEnab
   );
 });
 
-function pill(label, enabled) {
-  return enabled ? chalk.black.bgCyan(` ${label} `) : chalk.gray(` ${label} `);
+function pill(label, enabled, uiTheme) {
+  if (!enabled) {
+    if (isHexColor(uiTheme.pillDisabledHex)) {
+      return chalk.hex(uiTheme.pillDisabledHex)(` ${label} `);
+    }
+    return colorize(` ${label} `, uiTheme.pillDisabled);
+  }
+  if (isHexColor(uiTheme.pillEnabledBgHex)) {
+    const fgHex = isHexColor(uiTheme.pillEnabledFgHex)
+      ? uiTheme.pillEnabledFgHex
+      : pickContrastHex(uiTheme.pillEnabledBgHex);
+    return chalk.bgHex(uiTheme.pillEnabledBgHex).hex(fgHex)(` ${label} `);
+  }
+  return colorizeWithBackground(` ${label} `, uiTheme.pillEnabledBg, uiTheme.pillEnabledFg, false);
 }
 
 function clampIndex(index, length) {
@@ -908,9 +1034,17 @@ function isClearImagesShortcut(key, input) {
   return false;
 }
 
-function renderMessageLines(message, caretIndex = -1, blinkOn = true, precomputedLayout = null) {
+function isNewPostShortcut(key, input) {
+  const normalized = String(input || '').toLowerCase();
+  if (key.ctrl && normalized === 'n') return true;
+  // Some terminals encode Ctrl+N as SI.
+  if (normalized === '\u000e') return true;
+  return false;
+}
+
+function renderMessageLines(message, caretIndex = -1, blinkOn = true, precomputedLayout = null, uiTheme = null) {
   const text = String(message || '');
-  const max = 72;
+  const max = MESSAGE_PANEL_WIDTH;
   const maxVisibleLines = 4;
   const layout = precomputedLayout || buildWrappedLayout(text, max);
 
@@ -936,10 +1070,10 @@ function renderMessageLines(message, caretIndex = -1, blinkOn = true, precompute
     if (caretPos.column < rawLine.length) {
       visible[localLineIndex] =
         rawLine.slice(0, caretPos.column) +
-        chalk.white(caretChar) +
+        colorize(caretChar, uiTheme?.caret || 'white') +
         rawLine.slice(caretPos.column + 1);
     } else {
-      visible[localLineIndex] = rawLine + chalk.white(caretChar);
+      visible[localLineIndex] = rawLine + colorize(caretChar, uiTheme?.caret || 'white');
     }
   }
 
@@ -949,7 +1083,11 @@ function renderMessageLines(message, caretIndex = -1, blinkOn = true, precompute
     if (!formatted.includes('[image')) return formatted;
     return formatted.replace(/\[image[^\]]*\]/gi, () => {
       imageCounter++;
-      return chalk.black.bgMagentaBright.bold(` Image ${imageCounter} `);
+      return colorizeWithBackground(
+        ` Image ${imageCounter} `,
+        uiTheme?.imageTagBg || 'magentaBright',
+        uiTheme?.imageTagFg || 'black'
+      );
     });
   });
 }
@@ -1081,7 +1219,7 @@ function looksLikeMediaFilePath(input) {
   return trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../') || trimmed.startsWith('~') || trimmed.includes('/');
 }
 
-function renderImageTagLine(attachmentsCsv, inlineMedia) {
+function renderImageTagLine(attachmentsCsv, inlineMedia, uiTheme = null) {
   const pathTags = (attachmentsCsv || '')
     .split(',')
     .map((p) => p.trim())
@@ -1093,11 +1231,19 @@ function renderImageTagLine(attachmentsCsv, inlineMedia) {
   let idx = 1;
   for (const p of pathTags) {
     const label = isVideoPath(p) ? 'Video' : 'Image';
-    tags.push(chalk.black.bgMagentaBright.bold(` ${label} ${idx++} `));
+    tags.push(colorizeWithBackground(
+      ` ${label} ${idx++} `,
+      uiTheme?.imageTagBg || 'magentaBright',
+      uiTheme?.imageTagFg || 'black'
+    ));
   }
   for (const item of inlineMedia) {
     const label = item.isVideo ? 'Video' : 'Image';
-    tags.push(chalk.black.bgMagentaBright.bold(` ${label} ${idx++} `));
+    tags.push(colorizeWithBackground(
+      ` ${label} ${idx++} `,
+      uiTheme?.imageTagBg || 'magentaBright',
+      uiTheme?.imageTagFg || 'black'
+    ));
   }
   return tags.join(' ');
 }
@@ -1145,13 +1291,14 @@ function mask(value) {
   return `${value.slice(0, 3)}${'*'.repeat(Math.max(4, value.length - 6))}${value.slice(-3)}`;
 }
 
-async function persistForm(form) {
+async function persistForm(form, themePreference) {
   const [, secretStorage] = await Promise.all([
     saveConfig({
       mastodon: { enabled: form.mastodonEnabled, instance: form.mastodonInstance },
       x: { enabled: form.xEnabled },
       bluesky: { enabled: form.blueskyEnabled, handle: form.blueskyHandle },
       compose: { lastAttachments: form.attachments },
+      theme: normalizeThemePreference(themePreference),
     }),
     saveSecrets({
       mastodonToken: form.mastodonToken,
@@ -1169,6 +1316,242 @@ function renderSecretStorageFooter(mode) {
   if (mode === 'fallback') return 'secrets storage: encrypted fallback file (~/.config/socialsox-tui/secrets.json)';
   return '';
 }
+
+function getFilteredSlashCommands(slashQuery, themeCatalog) {
+  if (!slashQuery) return [];
+
+  if (slashQuery === '/themes') {
+    return [{
+      name: '/themes',
+      desc: 'Open theme picker submenu',
+      kind: 'theme-menu',
+    }];
+  }
+
+  if (slashQuery.startsWith('/themes ')) {
+    const themeCommands = [
+      {
+        name: '/themes system',
+        desc: 'Default: terminal-derived system theme',
+        kind: 'system',
+      },
+      ...themeCatalog.map((theme) => ({
+        name: `/themes ${theme.name}`,
+        desc: `Apply ${theme.name}`,
+        kind: 'manual',
+        themeName: theme.name,
+      })),
+    ];
+
+    return themeCommands.filter((cmd) => cmd.name.toLowerCase().startsWith(slashQuery));
+  }
+
+  return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(slashQuery));
+}
+
+function normalizeThemePreference(themePreference, themeCatalog = []) {
+  const mode = themePreference?.mode === 'manual' ? 'manual' : 'system';
+  const name = typeof themePreference?.name === 'string' ? themePreference.name.trim() : '';
+
+  if (mode !== 'manual' || !name) {
+    return { mode: 'system', name: '' };
+  }
+
+  const matched = themeCatalog.find((theme) => theme.name.toLowerCase() === name.toLowerCase());
+  if (!matched) {
+    return { mode: 'system', name: '' };
+  }
+
+  return { mode: 'manual', name: matched.name };
+}
+
+function resolveUiTheme(themePreference, themeCatalog) {
+  const normalized = normalizeThemePreference(themePreference, themeCatalog);
+  if (normalized.mode !== 'manual') {
+    return buildSystemTheme();
+  }
+
+  const matched = themeCatalog.find((theme) => theme.name === normalized.name);
+  if (!matched) {
+    return buildSystemTheme();
+  }
+
+  return buildThemeFromPalette(matched.palette);
+}
+
+function buildSystemTheme() {
+  const slashSelectionBg = 'black';
+  const pillEnabledBg = 'cyan';
+  const imageTagBg = 'magentaBright';
+  return {
+    banner: 'cyanBright',
+    panelBg: pickPanelBackgroundColor(),
+    panelBgHex: '',
+    spinner: 'cyan',
+    commandName: 'cyan',
+    slashSelectionBg,
+    slashSelectionFg: pickContrastTextColor(slashSelectionBg),
+    pillEnabledBg,
+    pillEnabledFg: pickContrastTextColor(pillEnabledBg),
+    pillEnabledBgHex: '',
+    pillEnabledFgHex: '',
+    pillDisabled: 'gray',
+    pillDisabledHex: '',
+    caret: 'white',
+    imageTagBg,
+    imageTagFg: pickContrastTextColor(imageTagBg),
+    configActive: 'green',
+    resultsHeading: 'yellow',
+    success: 'green',
+    error: 'red',
+  };
+}
+
+function buildThemeFromPalette(palette) {
+  const slashSelectionBg = hexToInkColor(palette.selection_background || palette.color8, 'black');
+  const accent = hexToInkColor(palette.accent || palette.color4, 'cyanBright');
+  const panelBgHex = normalizeHexColor(palette.background || palette.color0);
+  const pillEnabledBgHex = normalizeHexColor(palette.color4 || palette.accent);
+  const pillDisabledHex = normalizeHexColor(palette.color8 || palette.color0);
+  const pillEnabledBg = hexToInkColor(palette.color4 || palette.accent, accent);
+  const imageTagBg = hexToInkColor(palette.color5 || palette.accent, 'magentaBright');
+  return {
+    banner: accent,
+    panelBg: panelBgHex || hexToInkColor(palette.background || palette.color0, 'gray'),
+    panelBgHex,
+    spinner: accent,
+    commandName: accent,
+    slashSelectionBg,
+    slashSelectionFg: pickContrastTextColor(slashSelectionBg),
+    pillEnabledBg,
+    pillEnabledFg: pickContrastTextColor(pillEnabledBg),
+    pillEnabledBgHex,
+    pillEnabledFgHex: pillEnabledBgHex ? pickContrastHex(pillEnabledBgHex) : '',
+    pillDisabled: hexToInkColor(palette.color8 || palette.color0, 'gray'),
+    pillDisabledHex,
+    caret: hexToInkColor(palette.cursor || palette.foreground || palette.color15, 'whiteBright'),
+    imageTagBg,
+    imageTagFg: pickContrastTextColor(imageTagBg),
+    configActive: hexToInkColor(palette.color2 || palette.accent, 'green'),
+    resultsHeading: hexToInkColor(palette.color3 || palette.accent, 'yellow'),
+    success: hexToInkColor(palette.color2 || palette.accent, 'green'),
+    error: hexToInkColor(palette.color1, 'red'),
+  };
+}
+
+function colorize(value, colorName) {
+  const method = String(colorName || '');
+  const fn = chalk[method];
+  if (typeof fn === 'function') {
+    return fn(value);
+  }
+  return value;
+}
+
+function colorizeWithBackground(value, bgColorName, fgColorName, bold = true) {
+  let painter = chalk;
+
+  const bgMethod = toBackgroundMethodName(bgColorName);
+  if (bgMethod && typeof painter[bgMethod] === 'function') {
+    painter = painter[bgMethod];
+  }
+
+  const fgMethod = String(fgColorName || '');
+  if (fgMethod && typeof painter[fgMethod] === 'function') {
+    painter = painter[fgMethod];
+  }
+
+  if (bold && typeof painter.bold === 'function') {
+    painter = painter.bold;
+  }
+
+  return painter(value);
+}
+
+function toBackgroundMethodName(colorName) {
+  const name = String(colorName || '');
+  if (!name) return '';
+  return `bg${name[0].toUpperCase()}${name.slice(1)}`;
+}
+
+function pickContrastTextColor(bgColor) {
+  return isLightInkColor(bgColor) ? 'black' : 'whiteBright';
+}
+
+function isLightInkColor(colorName) {
+  const lightColors = new Set([
+    'yellow',
+    'yellowBright',
+    'white',
+    'whiteBright',
+    'cyanBright',
+  ]);
+  return lightColors.has(String(colorName || ''));
+}
+
+function hexToInkColor(hex, fallback = 'white') {
+  if (!isHexColor(hex)) return fallback;
+  const [r, g, b] = parseHexColor(hex);
+
+  let bestName = fallback;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const swatch of ANSI_SWATCHES) {
+    const dr = r - swatch.r;
+    const dg = g - swatch.g;
+    const db = b - swatch.b;
+    const distance = (dr * dr) + (dg * dg) + (db * db);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestName = swatch.name;
+    }
+  }
+
+  return bestName;
+}
+
+function isHexColor(value) {
+  return /^#[0-9a-fA-F]{6}$/.test(String(value || ''));
+}
+
+function normalizeHexColor(value) {
+  const text = String(value || '').trim();
+  if (!isHexColor(text)) return '';
+  return text.toLowerCase();
+}
+
+function pickContrastHex(hex) {
+  if (!isHexColor(hex)) return '#ffffff';
+  const [r, g, b] = parseHexColor(hex);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.58 ? '#000000' : '#ffffff';
+}
+
+function parseHexColor(hex) {
+  return [
+    Number.parseInt(hex.slice(1, 3), 16),
+    Number.parseInt(hex.slice(3, 5), 16),
+    Number.parseInt(hex.slice(5, 7), 16),
+  ];
+}
+
+const ANSI_SWATCHES = [
+  { name: 'black', r: 0, g: 0, b: 0 },
+  { name: 'red', r: 205, g: 49, b: 49 },
+  { name: 'green', r: 13, g: 188, b: 121 },
+  { name: 'yellow', r: 229, g: 229, b: 16 },
+  { name: 'blue', r: 36, g: 114, b: 200 },
+  { name: 'magenta', r: 188, g: 63, b: 188 },
+  { name: 'cyan', r: 17, g: 168, b: 205 },
+  { name: 'white', r: 229, g: 229, b: 229 },
+  { name: 'gray', r: 102, g: 102, b: 102 },
+  { name: 'redBright', r: 241, g: 76, b: 76 },
+  { name: 'greenBright', r: 35, g: 209, b: 139 },
+  { name: 'yellowBright', r: 245, g: 245, b: 67 },
+  { name: 'blueBright', r: 59, g: 142, b: 234 },
+  { name: 'magentaBright', r: 214, g: 112, b: 214 },
+  { name: 'cyanBright', r: 41, g: 184, b: 219 },
+  { name: 'whiteBright', r: 255, g: 255, b: 255 },
+];
 
 function pickPanelBackgroundColor() {
   const indices = readTerminalColorIndices();

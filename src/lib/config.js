@@ -23,6 +23,7 @@ const DEFAULT_CONFIG = {
   x: { enabled: true },
   bluesky: { enabled: true, handle: '' },
   compose: { lastAttachments: '' },
+  theme: { mode: 'system', name: '' },
 };
 
 async function ensureDir() {
@@ -218,6 +219,10 @@ function normalizeLegacyData(data) {
       },
       compose: {
         lastAttachments: '',
+      },
+      theme: {
+        mode: 'system',
+        name: '',
       },
     },
     secrets: {
