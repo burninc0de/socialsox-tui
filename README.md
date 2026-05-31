@@ -2,6 +2,8 @@
 
 A fast, compose-first terminal app for crossposting to Mastodon, X, and Bluesky with image/video support.
 
+MIT License.
+
 ## Features
 
 - Crosspost to Mastodon, X, Bluesky in one action
