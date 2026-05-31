@@ -43,8 +43,7 @@ const SLASH_COMMANDS = [
   { name: '/bluesky', desc: 'Toggle Bluesky' },
   { name: '/all', desc: 'Enable all platforms' },
   { name: '/none', desc: 'Disable all platforms' },
-  { name: '/clear', desc: 'Clear message' },
-  { name: '/post', desc: 'Submit post' },
+
   { name: '/config', desc: 'Switch to config screen' },
 ];
 
