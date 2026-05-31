@@ -218,6 +218,23 @@ export function App({ resetConfig }) {
   const activeFields = useMemo(() => (screen === 'config' ? CONFIG_FIELDS : POST_FIELDS), [screen]);
   const selection = useMemo(() => activeFields[cursor], [activeFields, cursor]);
   const busySpinner = BRAILLE_SPINNER_FRAMES[spinnerFrameIndex];
+  const messageLayout = useMemo(
+    () => buildWrappedLayout(String(form.message || ''), 72),
+    [form.message]
+  );
+  const mediaSummary = useMemo(
+    () => renderMediaCount(form.attachments, inlineMedia),
+    [form.attachments, inlineMedia]
+  );
+  const imageTagLine = useMemo(
+    () => renderImageTagLine(form.attachments, inlineMedia),
+    [form.attachments, inlineMedia]
+  );
+  const isMessageEditing = selection.key === 'message' && editing;
+  const renderedMessageLines = useMemo(
+    () => renderMessageLines(form.message, isMessageEditing ? messageCursor : -1, blinkOn, messageLayout),
+    [form.message, isMessageEditing, messageCursor, blinkOn, messageLayout]
+  );
 
   function switchScreen(nextScreen) {
     setScreen(nextScreen);
@@ -729,9 +746,7 @@ export function App({ resetConfig }) {
 
   return (
     <Box flexDirection="column" padding={1} paddingLeft={2}>
-      <Box justifyContent="center">
-        <Text color={THEME.banner}>{SOCIALSOX_BANNER}</Text>
-      </Box>
+      <Banner />
       <Box><Text> </Text></Box>
       {screen === 'post' && (
         <Box marginTop={1} flexDirection="column">
@@ -742,11 +757,7 @@ export function App({ resetConfig }) {
             flexDirection="column"
           >
             <Box flexDirection="column" minHeight={5}>
-              {renderMessageLines(
-                form.message,
-                selection.key === 'message' && editing ? messageCursor : -1,
-                blinkOn
-              ).map((line, idx) => (
+              {renderedMessageLines.map((line, idx) => (
                 <Text key={`msg-line-${idx}`}>{line}</Text>
               ))}
               {slashActive && filteredCommands.length > 0 && filteredCommands.map((cmd, idx) => (
@@ -754,18 +765,15 @@ export function App({ resetConfig }) {
                   {' '}{chalk.cyan(cmd.name)}{'  '}{chalk.dim(cmd.desc)}{' '}
                 </Text>
               ))}
-              {(() => {
-                const imageLine = renderImageTagLine(form.attachments, inlineMedia);
-                return imageLine ? (
-                  <Box marginTop={1}>
-                    <Text>{imageLine}</Text>
-                  </Box>
-                ) : null;
-              })()}
+              {imageTagLine ? (
+                <Box marginTop={1}>
+                  <Text>{imageTagLine}</Text>
+                </Box>
+              ) : null}
             </Box>
           </Box>
           <Box marginTop={1}>
-            <Text dimColor>{form.message.length} chars{renderMediaCount(form.attachments, inlineMedia) && ` · ${renderMediaCount(form.attachments, inlineMedia)}`} · </Text>
+            <Text dimColor>{form.message.length} chars{mediaSummary && ` · ${mediaSummary}`} · </Text>
             {busy && <Text color="cyan">{busySpinner} </Text>}
             <Text dimColor>{status}</Text>
           </Box>
@@ -773,25 +781,11 @@ export function App({ resetConfig }) {
       )}
 
       {screen === 'post' && (
-        <Box marginTop={1} flexDirection="column">
-          <Box>
-            <Text>
-              {pill('alt+1 mastodon', form.mastodonEnabled)}{' '}
-              {pill('alt+2 x', form.xEnabled)}{' '}
-              {pill('alt+3 bluesky', form.blueskyEnabled)}
-            </Text>
-          </Box>
-          <Box marginTop={1}>
-            <Text dimColor>
-              ctrl+p post 
-            </Text>
-          </Box>
-          <Box justifyContent="flex-end">
-            <Text dimColor>
-            /commands · ctrl+q quit
-            </Text>
-          </Box>
-        </Box>
+        <PostQuickHelp
+          mastodonEnabled={form.mastodonEnabled}
+          xEnabled={form.xEnabled}
+          blueskyEnabled={form.blueskyEnabled}
+        />
       )}
 
       {screen === 'config' && (
@@ -845,6 +839,38 @@ function formatValue(value) {
   return String(value);
 }
 
+const Banner = React.memo(function Banner() {
+  return (
+    <Box justifyContent="center">
+      <Text color={THEME.banner}>{SOCIALSOX_BANNER}</Text>
+    </Box>
+  );
+});
+
+const PostQuickHelp = React.memo(function PostQuickHelp({ mastodonEnabled, xEnabled, blueskyEnabled }) {
+  return (
+    <Box marginTop={1} flexDirection="column">
+      <Box>
+        <Text>
+          {pill('alt+1 mastodon', mastodonEnabled)}{' '}
+          {pill('alt+2 x', xEnabled)}{' '}
+          {pill('alt+3 bluesky', blueskyEnabled)}
+        </Text>
+      </Box>
+      <Box marginTop={1}>
+        <Text dimColor>
+          ctrl+p post
+        </Text>
+      </Box>
+      <Box justifyContent="flex-end">
+        <Text dimColor>
+          /commands · ctrl+q quit
+        </Text>
+      </Box>
+    </Box>
+  );
+});
+
 function pill(label, enabled) {
   return enabled ? chalk.black.bgCyan(` ${label} `) : chalk.gray(` ${label} `);
 }
@@ -882,14 +908,16 @@ function isClearImagesShortcut(key, input) {
   return false;
 }
 
-function renderMessageLines(message, caretIndex = -1, blinkOn = true) {
+function renderMessageLines(message, caretIndex = -1, blinkOn = true, precomputedLayout = null) {
   const text = String(message || '');
   const max = 72;
   const maxVisibleLines = 4;
-  const layout = buildWrappedLayout(text, max);
+  const layout = precomputedLayout || buildWrappedLayout(text, max);
 
   const clampedCaret = caretIndex >= 0 ? clampIndex(caretIndex, text.length) : -1;
-  const caretPos = clampedCaret >= 0 ? layout.insertionPoints[clampedCaret] : null;
+  const caretPos = clampedCaret >= 0
+    ? getCaretPosition(layout.lineStartIndices, clampedCaret)
+    : null;
 
   const caretLine = caretPos ? caretPos.line : Math.max(0, layout.lines.length - 1);
   const endLineExclusive = Math.max(maxVisibleLines, caretLine + 1);
@@ -928,18 +956,18 @@ function renderMessageLines(message, caretIndex = -1, blinkOn = true) {
 
 function buildWrappedLayout(text, maxCols) {
   const lines = [''];
-  const insertionPoints = [];
+  const lineStartIndices = [0];
   let line = 0;
   let column = 0;
 
-  const newline = () => {
+  const newline = (nextStartIndex) => {
     line++;
     column = 0;
     lines.push('');
+    lineStartIndices.push(nextStartIndex);
   };
 
   const writeChar = (absoluteIndex, ch) => {
-    insertionPoints[absoluteIndex] = { line, column };
     lines[line] += ch;
     column++;
 
@@ -947,7 +975,7 @@ function buildWrappedLayout(text, maxCols) {
     if (column >= maxCols) {
       const next = text[absoluteIndex + 1];
       if (typeof next === 'string' && next !== '\n') {
-        newline();
+        newline(absoluteIndex + 1);
       }
     }
   };
@@ -957,8 +985,7 @@ function buildWrappedLayout(text, maxCols) {
     const ch = text[i];
 
     if (ch === '\n') {
-      insertionPoints[i] = { line, column };
-      newline();
+      newline(i + 1);
       i++;
       continue;
     }
@@ -988,7 +1015,7 @@ function buildWrappedLayout(text, maxCols) {
 
     // Word run: wrap at word boundary when possible; split only if word is longer than line width.
     if (column > 0 && runLength <= maxCols && column + runLength > maxCols) {
-      newline();
+      newline(i);
     }
 
     for (let p = i; p < end; p++) {
@@ -1001,8 +1028,29 @@ function buildWrappedLayout(text, maxCols) {
     i = end;
   }
 
-  insertionPoints[text.length] = { line, column };
-  return { lines, insertionPoints };
+  return { lines, lineStartIndices };
+}
+
+function getCaretPosition(lineStartIndices, caretIndex) {
+  const line = findLineIndexForCaret(lineStartIndices, caretIndex);
+  const column = caretIndex - lineStartIndices[line];
+  return { line, column };
+}
+
+function findLineIndexForCaret(lineStartIndices, caretIndex) {
+  // Upper-bound binary search for first start index > caretIndex.
+  let lo = 0;
+  let hi = lineStartIndices.length;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (lineStartIndices[mid] <= caretIndex) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  return Math.max(0, lo - 1);
 }
 
 function isInlineWhitespace(ch) {
