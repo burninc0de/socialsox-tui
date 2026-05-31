@@ -80,8 +80,8 @@ const LOADING_MESSAGES = [
 ];
 const THEME = {
   banner: 'cyanBright',
-  panelBg: 'blackBright',
-  slashSelectionBg: 'blackBright',
+  panelBg: pickPanelBackgroundColor(),
+  slashSelectionBg: 'black',
   configActive: 'green',
   resultsHeading: 'yellow',
   success: 'green',
@@ -1102,4 +1102,85 @@ async function persistForm(form) {
 function renderSecretStorageFooter(mode) {
   if (mode === 'fallback') return 'secrets storage: encrypted fallback file (~/.config/socialsox-tui/secrets.json)';
   return '';
+}
+
+function pickPanelBackgroundColor() {
+  const indices = readTerminalColorIndices();
+  if (!indices) {
+    // No bg hint from terminal; use a neutral ANSI color.
+    return 'gray';
+  }
+
+  const isLightBg = inferLightBackground(indices.bg, indices.fg);
+  const shifted = isLightBg
+    ? shiftAnsiBrightness(indices.bg, -1)
+    : shiftAnsiBrightness(indices.bg, 1);
+
+  return ansiIndexToInkColor(shifted);
+}
+
+function readTerminalColorIndices() {
+  const raw = process.env.COLORFGBG;
+  if (!raw) return null;
+
+  const parts = raw
+    .split(';')
+    .map((part) => Number.parseInt(part.trim(), 10))
+    .filter((value) => Number.isInteger(value));
+
+  if (parts.length === 0) return null;
+
+  return {
+    fg: parts.length > 1 ? parts[0] : null,
+    bg: parts[parts.length - 1],
+  };
+}
+
+function inferLightBackground(bgIndex, fgIndex) {
+  const bg = normalizeAnsi16Index(bgIndex);
+  const bgBase = bg % 8;
+  const bgBright = bg >= 8;
+
+  if (Number.isInteger(fgIndex)) {
+    const fg = normalizeAnsi16Index(fgIndex);
+    const fgBase = fg % 8;
+
+    // Typical defaults: dark fg on light bg, light fg on dark bg.
+    if (fgBase === 0 && bgBase !== 0) return true;
+    if (fgBase === 7 && bgBase !== 7) return false;
+  }
+
+  if (bgBase === 7) return true;
+  if (bgBright && bgBase !== 0) return true;
+  return false;
+}
+
+function shiftAnsiBrightness(index, direction) {
+  const normalized = normalizeAnsi16Index(index);
+
+  if (direction > 0) {
+    if (normalized < 8) return normalized + 8;
+    return normalized;
+  }
+
+  if (normalized >= 8) return normalized - 8;
+
+  // White has no dimmer same-hue variant in ANSI basics; use bright black as subtle dark contrast.
+  if (normalized % 8 === 7) return 8;
+  return normalized;
+}
+
+function ansiIndexToInkColor(index) {
+  const baseNames = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+  const normalized = normalizeAnsi16Index(index);
+  const base = normalized % 8;
+  const bright = normalized >= 8;
+  const baseName = baseNames[base];
+  return bright ? `${baseName}Bright` : baseName;
+}
+
+function normalizeAnsi16Index(value) {
+  if (!Number.isInteger(value)) return 0;
+  if (value < 0) return 0;
+  return value % 16;
 }
