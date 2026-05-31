@@ -1083,6 +1083,12 @@ function renderMessageLines(message, caretIndex = -1, blinkOn = true, precompute
     if (!formatted.includes('[image')) return formatted;
     return formatted.replace(/\[image[^\]]*\]/gi, () => {
       imageCounter++;
+      if (isHexColor(uiTheme?.imageTagBgHex)) {
+        const fgHex = isHexColor(uiTheme?.imageTagFgHex)
+          ? uiTheme.imageTagFgHex
+          : pickContrastHex(uiTheme.imageTagBgHex);
+        return chalk.bgHex(uiTheme.imageTagBgHex).hex(fgHex)(` Image ${imageCounter} `);
+      }
       return colorizeWithBackground(
         ` Image ${imageCounter} `,
         uiTheme?.imageTagBg || 'magentaBright',
@@ -1231,19 +1237,33 @@ function renderImageTagLine(attachmentsCsv, inlineMedia, uiTheme = null) {
   let idx = 1;
   for (const p of pathTags) {
     const label = isVideoPath(p) ? 'Video' : 'Image';
-    tags.push(colorizeWithBackground(
-      ` ${label} ${idx++} `,
-      uiTheme?.imageTagBg || 'magentaBright',
-      uiTheme?.imageTagFg || 'black'
-    ));
+    if (isHexColor(uiTheme?.imageTagBgHex)) {
+      const fgHex = isHexColor(uiTheme?.imageTagFgHex)
+        ? uiTheme.imageTagFgHex
+        : pickContrastHex(uiTheme.imageTagBgHex);
+      tags.push(chalk.bgHex(uiTheme.imageTagBgHex).hex(fgHex)(` ${label} ${idx++} `));
+    } else {
+      tags.push(colorizeWithBackground(
+        ` ${label} ${idx++} `,
+        uiTheme?.imageTagBg || 'magentaBright',
+        uiTheme?.imageTagFg || 'black'
+      ));
+    }
   }
   for (const item of inlineMedia) {
     const label = item.isVideo ? 'Video' : 'Image';
-    tags.push(colorizeWithBackground(
-      ` ${label} ${idx++} `,
-      uiTheme?.imageTagBg || 'magentaBright',
-      uiTheme?.imageTagFg || 'black'
-    ));
+    if (isHexColor(uiTheme?.imageTagBgHex)) {
+      const fgHex = isHexColor(uiTheme?.imageTagFgHex)
+        ? uiTheme.imageTagFgHex
+        : pickContrastHex(uiTheme.imageTagBgHex);
+      tags.push(chalk.bgHex(uiTheme.imageTagBgHex).hex(fgHex)(` ${label} ${idx++} `));
+    } else {
+      tags.push(colorizeWithBackground(
+        ` ${label} ${idx++} `,
+        uiTheme?.imageTagBg || 'magentaBright',
+        uiTheme?.imageTagFg || 'black'
+      ));
+    }
   }
   return tags.join(' ');
 }
@@ -1400,6 +1420,8 @@ function buildSystemTheme() {
     caret: 'white',
     imageTagBg,
     imageTagFg: pickContrastTextColor(imageTagBg),
+    imageTagBgHex: '',
+    imageTagFgHex: '',
     configActive: 'green',
     resultsHeading: 'yellow',
     success: 'green',
@@ -1414,6 +1436,7 @@ function buildThemeFromPalette(palette) {
   const pillEnabledBgHex = normalizeHexColor(palette.color4 || palette.accent);
   const pillDisabledHex = normalizeHexColor(palette.color8 || palette.color0);
   const pillEnabledBg = hexToInkColor(palette.color4 || palette.accent, accent);
+  const imageTagBgHex = normalizeHexColor(palette.color5 || palette.accent);
   const imageTagBg = hexToInkColor(palette.color5 || palette.accent, 'magentaBright');
   return {
     banner: accent,
@@ -1432,6 +1455,8 @@ function buildThemeFromPalette(palette) {
     caret: hexToInkColor(palette.cursor || palette.foreground || palette.color15, 'whiteBright'),
     imageTagBg,
     imageTagFg: pickContrastTextColor(imageTagBg),
+    imageTagBgHex,
+    imageTagFgHex: imageTagBgHex ? pickContrastHex(imageTagBgHex) : '',
     configActive: hexToInkColor(palette.color2 || palette.accent, 'green'),
     resultsHeading: hexToInkColor(palette.color3 || palette.accent, 'yellow'),
     success: hexToInkColor(palette.color2 || palette.accent, 'green'),
