@@ -11,7 +11,28 @@ MIT License.
 - Attach up to 4 image/video files
 - Concurrent posting with per-platform results
 - Credentials stored in system keychain (`keytar`) with encrypted file fallback
-- Local config file is encrypted at rest
+- Local config and fallback secrets are encrypted at rest
+
+## Security model
+
+- Preferred storage is your OS keychain via `keytar`.
+- If keychain access fails, the app falls back to an encrypted file in `~/.config/socialsox-tui/`.
+- The fallback encryption key is derived from local machine/user properties. This protects against casual disclosure, but should not be treated as strong protection against a local attacker with account-level access.
+- Keep your OS account secure and use full-disk encryption for stronger protection.
+
+## Project scope
+
+- This repo is currently source-first and not intended for npm publishing.
+- Use it by cloning and running from source (`npm install`, then `npm start`).
+
+## Known limitations
+
+- No formal automated test suite yet. CI currently runs a smoke check only.
+- Keychain support depends on local system setup. If keychain access fails, credentials fall back to local encrypted storage.
+- The fallback encryption key is machine/user-derived and is not a substitute for full system security controls.
+- Clipboard image paste on Linux requires `wl-paste` (Wayland) or `xclip` (X11).
+- X posts are limited to 280 characters and media handling may change with upstream platform/API behavior.
+- Bluesky video posting depends on current ATProto backend capabilities and may vary over time.
 
 ## Run
 
@@ -111,3 +132,11 @@ The TUI can ingest the `socialsox-credentials.json` export format from the origi
 - It only reads from: `~/.config/socialsox-tui/socialsox-credentials.json`
 
 Once imported, the credentials are re-encrypted into the app's own storage (keychain + encrypted file). The raw `socialsox-credentials.json` can then be safely deleted.
+
+## Warranty and liability
+
+This software is provided as-is, without warranties or guarantees of any kind.
+
+By using this software, you accept that the authors and contributors are not liable for any claims, damages, losses, data loss, service disruption, or other liability arising from its use.
+
+For full legal terms, see the MIT license in `LICENSE`.
