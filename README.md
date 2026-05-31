@@ -2,6 +2,8 @@
 
 A fast, compose-first terminal app for crossposting to Mastodon, X, and Bluesky with image/video support.
 
+![Screenshot](screenshots/screenshot.png)
+
 MIT License.
 
 ## Features
