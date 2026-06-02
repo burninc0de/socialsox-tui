@@ -713,6 +713,40 @@ export function App({ resetConfig }) {
         return;
       }
 
+      if (screen === 'post' && selection.key === 'message' && key.upArrow) {
+        const currentMessage = String(formRef.current.message || '');
+        const cursorIndex = clampIndex(messageCursor, currentMessage.length);
+        const layout = buildWrappedLayout(currentMessage, MESSAGE_PANEL_WIDTH);
+        const caretPos = getCaretPosition(layout.lineStartIndices, cursorIndex);
+        if (caretPos.line > 0) {
+          const prevLineStart = layout.lineStartIndices[caretPos.line - 1];
+          const prevLineEnd = caretPos.line < layout.lineStartIndices.length
+            ? layout.lineStartIndices[caretPos.line] - 1
+            : currentMessage.length;
+          const maxCol = prevLineEnd - prevLineStart;
+          const newCol = Math.min(caretPos.column, maxCol);
+          setMessageCursor(prevLineStart + newCol);
+        }
+        return;
+      }
+
+      if (screen === 'post' && selection.key === 'message' && key.downArrow) {
+        const currentMessage = String(formRef.current.message || '');
+        const cursorIndex = clampIndex(messageCursor, currentMessage.length);
+        const layout = buildWrappedLayout(currentMessage, MESSAGE_PANEL_WIDTH);
+        const caretPos = getCaretPosition(layout.lineStartIndices, cursorIndex);
+        if (caretPos.line < layout.lines.length - 1) {
+          const nextLineStart = layout.lineStartIndices[caretPos.line + 1];
+          const nextLineEnd = caretPos.line + 2 < layout.lineStartIndices.length
+            ? layout.lineStartIndices[caretPos.line + 2] - 1
+            : currentMessage.length;
+          const maxCol = nextLineEnd - nextLineStart;
+          const newCol = Math.min(caretPos.column, maxCol);
+          setMessageCursor(nextLineStart + newCol);
+        }
+        return;
+      }
+
       if (key.backspace || key.delete) {
         if (screen === 'post' && selection.key === 'message') {
           const currentMessage = String(formRef.current.message || '');
@@ -1065,21 +1099,27 @@ function renderMessageLines(message, caretIndex = -1, blinkOn = true, precompute
   if (caretPos && caretPos.line >= startLine && caretPos.line < startLine + maxVisibleLines) {
     const localLineIndex = caretPos.line - startLine;
     const rawLine = visible[localLineIndex] || '';
-    const caretChar = blinkOn ? '█' : ' ';
 
-    if (caretPos.column < rawLine.length) {
-      visible[localLineIndex] =
-        rawLine.slice(0, caretPos.column) +
-        colorize(caretChar, uiTheme?.caret || 'white') +
-        rawLine.slice(caretPos.column + 1);
+    if (blinkOn) {
+      const ch = caretPos.column < rawLine.length ? rawLine[caretPos.column] : ' ';
+      const caretCell = chalk.inverse(ch);
+
+      if (caretPos.column < rawLine.length) {
+        visible[localLineIndex] =
+          rawLine.slice(0, caretPos.column) +
+          caretCell +
+          rawLine.slice(caretPos.column + 1);
+      } else {
+        visible[localLineIndex] = rawLine + caretCell;
+      }
     } else {
-      visible[localLineIndex] = rawLine + colorize(caretChar, uiTheme?.caret || 'white');
+      // Character stays visible during blink-off — nothing to replace.
     }
   }
 
   let imageCounter = 0;
   return visible.map((lineText) => {
-    const formatted = lineText;
+    const formatted = lineText === '' ? ' ' : lineText;
     if (!formatted.includes('[image')) return formatted;
     return formatted.replace(/\[image[^\]]*\]/gi, () => {
       imageCounter++;
