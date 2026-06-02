@@ -99,6 +99,7 @@ Switch to the **CONFIG** screen (`tab`) and fill in your credentials. They are s
 - `Ctrl+P` — submit post
 - `Ctrl+X` — clear all media attachments
 - `v` or `Ctrl+V` — paste clipboard image as media blob
+- `Ctrl+C` — copy message to clipboard
 - `m` — enter POST screen (useful from CONFIG)
 - `Enter` — newline in message, or finish editing other fields
 - Left/Right arrows — move cursor within message (editing)
@@ -118,6 +119,7 @@ Switch to the **CONFIG** screen (`tab`) and fill in your credentials. They are s
 - While editing the `Message` field, you can paste `data:image/...;base64,...` blobs directly and they are auto-attached.
 - On Linux, `v` reads image blobs from clipboard using `wl-paste` (Wayland) or `xclip` (X11).
 - If your terminal inserts placeholders like `[Image 1]` on paste, the app auto-detects that and pulls the real image blob from system clipboard.
+- **Clipboard paste (images vs videos)**: On Wayland, `Ctrl+V` pastes text content (which may include image paths), while `Ctrl+Shift+V` performs a raw paste of binary data. Images often have a text representation so `Ctrl+V` works; videos usually don't, so use `Ctrl+Shift+V` for video content.
 
 ## Reset config
 
