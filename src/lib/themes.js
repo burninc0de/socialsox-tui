@@ -274,6 +274,33 @@ const BUILT_IN_THEME_PRESETS = [
     }
   },
   {
+    "name": "tokyo-night-light",
+    "palette": {
+      "accent": "#2959aa",
+      "cursor": "#363c4d",
+      "foreground": "#363c4d",
+      "background": "#e6e7ed",
+      "selection_foreground": "#363c4d",
+      "selection_background": "#acb0bf",
+      "color0": "#343B58",
+      "color1": "#8c4351",
+      "color2": "#33635c",
+      "color3": "#8f5e15",
+      "color4": "#2959aa",
+      "color5": "#7b43ba",
+      "color6": "#006c86",
+      "color7": "#707280",
+      "color8": "#6b7089",
+      "color9": "#b35a6a",
+      "color10": "#4e8a7a",
+      "color11": "#b88a3e",
+      "color12": "#4d7ec8",
+      "color13": "#a06cd5",
+      "color14": "#3390a8",
+      "color15": "#8b8fa0"
+    }
+  },
+  {
     "name": "tokyo-night",
     "palette": {
       "accent": "#7aa2f7",
