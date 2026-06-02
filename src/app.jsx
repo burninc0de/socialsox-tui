@@ -14,7 +14,7 @@ import {
   saveConfig,
   saveSecrets,
 } from './lib/config.js';
-import { readClipboardImageMedia } from './lib/clipboard.js';
+import { readClipboardImageMedia, writeTextToClipboard } from './lib/clipboard.js';
 import { extractInlineImagesFromMessage, loadMedia } from './lib/media.js';
 import { runCrosspost } from './lib/crosspost.js';
 import { loadBuiltInThemes } from './lib/themes.js';
@@ -538,6 +538,15 @@ export function App({ resetConfig }) {
       return;
     }
 
+    if (key.ctrl && (input === 'c' || input === 'C')) {
+      const msg = String(formRef.current.message || '');
+      if (msg) {
+        const ok = await writeTextToClipboard(msg);
+        setStatus(ok ? 'Message copied to clipboard.' : 'Failed to copy to clipboard.');
+      }
+      return;
+    }
+
     if (key.meta && input === '1') {
       setForm((prev) => ({ ...prev, mastodonEnabled: !prev.mastodonEnabled }));
       return;
@@ -1007,7 +1016,7 @@ const PostQuickHelp = React.memo(function PostQuickHelp({ mastodonEnabled, xEnab
       </Box>
       <Box marginTop={1}>
         <Text dimColor>
-          ctrl+n new · ctrl+p post
+          ctrl+n new · ctrl+p post · ctrl+c copy
         </Text>
       </Box>
       <Box justifyContent="flex-end">

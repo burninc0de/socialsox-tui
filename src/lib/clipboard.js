@@ -73,3 +73,17 @@ export async function readClipboardImageMedia(index = 1) {
     buffer: result.buffer,
   };
 }
+
+export async function writeTextToClipboard(text) {
+  try {
+    await execa('wl-copy', [], { input: text, reject: false });
+    return true;
+  } catch {}
+
+  try {
+    await execa('xclip', ['-selection', 'clipboard'], { input: text, reject: false });
+    return true;
+  } catch {}
+
+  return false;
+}
