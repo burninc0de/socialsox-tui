@@ -181,6 +181,52 @@ export async function postToBluesky(message, config, secrets, media) {
         }
       : undefined;
 
+  const facets = [];
+  const encoder = new TextEncoder();
+
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  let match;
+  while ((match = urlRegex.exec(message)) !== null) {
+    facets.push({
+      index: {
+        byteStart: encoder.encode(message.slice(0, match.index)).length,
+        byteEnd: encoder.encode(message.slice(0, match.index + match[0].length)).length,
+      },
+      features: [{
+        $type: 'app.bsky.richtext.facet#link',
+        uri: match[0],
+      }],
+    });
+  }
+
+  const hashtagRegex = /(^|\s)(#[A-Za-z0-9_]+)/g;
+  while ((match = hashtagRegex.exec(message)) !== null) {
+    const tag = match[2];
+    const start = match.index + (match[1] ? match[1].length : 0);
+    const end = start + tag.length;
+    facets.push({
+      index: {
+        byteStart: encoder.encode(message.slice(0, start)).length,
+        byteEnd: encoder.encode(message.slice(0, end)).length,
+      },
+      features: [{
+        $type: 'app.bsky.richtext.facet#link',
+        uri: 'https://bsky.app/hashtag/' + encodeURIComponent(tag.replace(/^#/, '')),
+      }],
+    });
+  }
+
+  const record = {
+    $type: 'app.bsky.feed.post',
+    text: message,
+    createdAt: new Date().toISOString(),
+    embed,
+  };
+
+  if (facets.length > 0) {
+    record.facets = facets;
+  }
+
   const createRes = await fetch('https://bsky.social/xrpc/com.atproto.repo.createRecord', {
     method: 'POST',
     headers: {
@@ -190,12 +236,7 @@ export async function postToBluesky(message, config, secrets, media) {
     body: JSON.stringify({
       repo: session.did,
       collection: 'app.bsky.feed.post',
-      record: {
-        $type: 'app.bsky.feed.post',
-        text: message,
-        createdAt: new Date().toISOString(),
-        embed,
-      },
+      record,
     }),
   });
 
