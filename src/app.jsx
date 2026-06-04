@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import chalk from 'chalk';
@@ -907,7 +908,7 @@ export function App({ resetConfig }) {
           >
             <Box flexDirection="column" minHeight={5}>
               {renderedMessageLines.map((line, idx) => (
-                <Text key={`msg-line-${idx}`}>{line}</Text>
+                <Text key={`msg-line-${idx}`} color={uiTheme.panelText || undefined}>{line}</Text>
               ))}
               {slashActive && filteredCommands.length > 0 && filteredCommands.map((cmd, idx) => (
                 <Text
@@ -923,7 +924,7 @@ export function App({ resetConfig }) {
               ))}
               {imageTagLine ? (
                 <Box marginTop={1}>
-                  <Text>{imageTagLine}</Text>
+                  <Text color={uiTheme.panelText || undefined}>{imageTagLine}</Text>
                 </Box>
               ) : null}
             </Box>
@@ -1452,10 +1453,12 @@ function buildSystemTheme() {
   const slashSelectionBg = 'black';
   const pillEnabledBg = 'cyan';
   const imageTagBg = 'magentaBright';
+  const panelBg = pickPanelBackgroundColor();
   return {
     banner: 'cyanBright',
-    panelBg: pickPanelBackgroundColor(),
+    panelBg,
     panelBgHex: '',
+    panelText: panelBg ? pickContrastTextColor(panelBg) : '',
     spinner: 'cyan',
     commandName: 'cyan',
     slashSelectionBg,
@@ -1482,6 +1485,7 @@ function buildThemeFromPalette(palette) {
   const slashSelectionBg = hexToInkColor(palette.selection_background || palette.color8, 'black');
   const accent = hexToInkColor(palette.accent || palette.color4, 'cyanBright');
   const panelBgHex = normalizeHexColor(palette.background || palette.color0);
+  const panelBg = panelBgHex || hexToInkColor(palette.background || palette.color0, 'gray');
   const pillEnabledBgHex = normalizeHexColor(palette.color4 || palette.accent);
   const pillDisabledHex = normalizeHexColor(palette.color8 || palette.color0);
   const pillEnabledBg = hexToInkColor(palette.color4 || palette.accent, accent);
@@ -1489,8 +1493,9 @@ function buildThemeFromPalette(palette) {
   const imageTagBg = hexToInkColor(palette.color5 || palette.accent, 'magentaBright');
   return {
     banner: accent,
-    panelBg: panelBgHex || hexToInkColor(palette.background || palette.color0, 'gray'),
+    panelBg,
     panelBgHex,
+    panelText: panelBgHex ? hexToInkColor(pickContrastHex(panelBgHex), 'white') : pickContrastTextColor(panelBg),
     spinner: accent,
     commandName: accent,
     slashSelectionBg,
@@ -1630,16 +1635,50 @@ const ANSI_SWATCHES = [
 function pickPanelBackgroundColor() {
   const indices = readTerminalColorIndices();
   if (!indices) {
-    // No bg hint from terminal; use a neutral ANSI color.
+    // Fall back to desktop color-scheme when terminal doesn't expose COLORFGBG.
+    const desktopScheme = readDesktopColorScheme();
+    if (desktopScheme === 'light') return 'white';
+    if (desktopScheme === 'dark') return 'blackBright';
+
+    // Unknown environment: keep a visible but neutral panel style.
     return 'gray';
   }
 
   const isLightBg = inferLightBackground(indices.bg, indices.fg);
   const shifted = isLightBg
-    ? shiftAnsiBrightness(indices.bg, -1)
+    ? pickDarkerPanelIndex(indices.bg)
     : shiftAnsiBrightness(indices.bg, 1);
 
   return ansiIndexToInkColor(shifted);
+}
+
+function readDesktopColorScheme() {
+  try {
+    const out = execFileSync('gsettings', ['get', 'org.gnome.desktop.interface', 'color-scheme'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 150,
+    }).trim().toLowerCase();
+
+    if (out.includes('prefer-light')) return 'light';
+    if (out.includes('prefer-dark')) return 'dark';
+  } catch {
+    // gsettings may not exist (non-GNOME or minimal systems).
+  }
+  return 'unknown';
+}
+
+function pickDarkerPanelIndex(index) {
+  const normalized = normalizeAnsi16Index(index);
+  const base = normalized % 8;
+
+  // For bright colored/light backgrounds, dim same-hue tones can look too muddy.
+  // Use bright black as a gentler neutral contrast.
+  if (base === 7 || (normalized >= 8 && base !== 0)) {
+    return 8;
+  }
+
+  return shiftAnsiBrightness(normalized, -1);
 }
 
 function readTerminalColorIndices() {
